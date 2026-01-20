@@ -11,7 +11,7 @@ from sklearn.metrics import r2_score, mean_squared_error
 # 1. 페이지 설정
 st.set_page_config(page_title="Sensor ML Expert", layout="wide")
 
-st.title("🧪 센서 정밀 분석 대시보드 (영문 그래프 패치)")
+st.title("🧪 센서 정밀 분석 대시보드")
 st.markdown("다양한 머신러닝 모델을 통해 **온도와 습도**의 영향력을 정밀하게 분석합니다.")
 
 # 2. 사이드바 - 모델 선택
