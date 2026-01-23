@@ -1,156 +1,123 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.metrics import r2_score, mean_squared_error
+import plotly.graph_objects as go
+from sklearn.linear_model import LinearRegression
+from datetime import datetime, timedelta
 
-# 1. 페이지 설정 및 제목
-st.set_page_config(page_title="Sensor ML Expert (Physical Units)", layout="wide")
-st.title("🧪 센서 정밀 분석 대시보드 (K & ppm 버전)")
-st.markdown("섭씨와 습도(%)를 **절대온도(K)**와 **수증기 농도(ppm)**로 변환하여 분석합니다.")
+# 1. 페이지 설정
+st.set_page_config(page_title="Real-time Sensor Simulator", layout="wide")
 
-# 2. 사이드바 모델 선택
-st.sidebar.header("🤖 모델 알고리즘 선택")
-model_choice = st.sidebar.selectbox(
-    "적용할 모델을 선택하세요",
-    [
-        "1. 선형 회귀 (Linear Regression)", 
-        "2. 릿지 회귀 (Ridge Regression)", 
-        "3. 의사결정 나무 (Decision Tree)", 
-        "4. 랜덤 포레스트 (Random Forest)", 
-        "5. 그래디언트 부스팅 (Gradient Boosting)"
-    ]
-)
+st.title("📡 실시간 센서 인터랙티브 시뮬레이터")
+st.markdown("온습도 조절 시 모델이 예측한 저항값이 **실시간 데이터 로깅**처럼 그래프에 추가됩니다.")
 
-# 3. 데이터 로드 및 물리 변환
-uploaded_file = st.file_uploader("CSV 파일을 여기에 드래그하세요", type="csv")
+# 2. 초기 데이터 및 모델 학습 (파일 업로드 시)
+uploaded_file = st.file_uploader("먼저 학습 데이터(CSV)를 업로드하세요", type="csv")
 
 if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    df.columns = [col.strip() for col in df.columns]
+    # 데이터 로드 및 모델 학습 (백그라운드)
+    df_raw = pd.read_csv(uploaded_file)
+    df_raw.columns = [col.strip() for col in df_raw.columns]
     
-    if '측정 시간' in df.columns:
-        df['측정 시간'] = pd.to_datetime(df['측정 시간'])
+    # 모델 학습용 데이터 준비
+    if '측정 시간' in df_raw.columns:
+        df_raw['측정 시간'] = pd.to_datetime(df_raw['측정 시간'])
+        df_raw['Elapsed_Days'] = (df_raw['측정 시간'] - df_raw['측정 시간'].min()).dt.total_seconds() / (24 * 3600)
+    else:
+        df_raw['Elapsed_Days'] = np.arange(len(df_raw)) / 1440
+        
+    X = df_raw[['온도', '습도', 'Elapsed_Days']]
+    y = df_raw['저항'] / 1000.0
+    model = LinearRegression().fit(X, y)
     
-    # [물리 변환 단계]
-    # 1. 저항 kOhm 변환
-    df['Resistance_kOhm'] = df['저항'] / 1000.0
-    
-    # 2. 절대온도 (K) 변환
-    df['Temp_K'] = df['온도'] + 273.15
-    
-    # 3. 수증기 농도 (ppm) 변환 (Magnus-Tetens 공식 기준)
-    p_sat = 6.112 * np.exp((17.62 * df['온도']) / (243.12 + df['온도']))
-    p_v = (df['습도'] / 100) * p_sat
-    df['Humidity_ppm'] = (p_v / 1013.25) * 1_000_000
-    
-    # 학습용 데이터셋 구성 (K, ppm 사용)
-    X = df[['Temp_K', 'Humidity_ppm']]
-    y = df['Resistance_kOhm']
-    
-    # 모델 할당
-    if "1." in model_choice: model = LinearRegression()
-    elif "2." in model_choice: model = Ridge(alpha=1.0)
-    elif "3." in model_choice: model = DecisionTreeRegressor(max_depth=10)
-    elif "4." in model_choice: model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42)
-    elif "5." in model_choice: model = GradientBoostingRegressor(n_estimators=50, random_state=42)
+    # --- 시뮬레이션 메모리(Session State) 초기화 ---
+    if 'sim_data' not in st.session_state:
+        # 처음 시작은 원본 데이터의 마지막 50개 포인트로 시작
+        last_50 = df_raw.tail(50).copy()
+        st.session_state.sim_data = pd.DataFrame({
+            'Time': last_50['측정 시간'] if '측정 시간' in last_50.columns else [datetime.now() + timedelta(minutes=i) for i in range(50)],
+            'Resistance': last_50['저항'] / 1000.0,
+            'Temp': last_50['온도'],
+            'Humi': last_50['습도']
+        })
+        st.session_state.last_day = df_raw['Elapsed_Days'].max()
 
-    # 모델 학습
-    with st.spinner(f'{model_choice} 물리 모델 분석 중...'):
-        model.fit(X, y)
+    # 3. 사이드바 - 실시간 조절 컨트롤러
+    st.sidebar.header("🕹️ 실시간 환경 조절")
+    curr_temp = st.sidebar.slider("현재 온도 (°C)", 10.0, 50.0, float(df_raw['온도'].mean()), 0.1)
+    curr_humi = st.sidebar.slider("현재 습도 (%)", 10.0, 90.0, float(df_raw['습도'].mean()), 0.1)
     
-    y_pred = model.predict(X)
-    r2 = r2_score(y, y_pred)
-    rmse = np.sqrt(mean_squared_error(y, y_pred))
+    st.sidebar.divider()
+    if st.sidebar.button("🧹 데이터 초기화"):
+        st.session_state.sim_data = st.session_state.sim_data.tail(1)
+        st.rerun()
 
-    # 4. 분석 리포트 (수식/중요도 + 성능 지표)
+    # --- 실시간 포인트 생성 로직 ---
+    # 버튼을 누르거나 슬라이더가 변할 때마다 새 포인트 추가
+    new_time = st.session_state.sim_data['Time'].iloc[-1] + timedelta(minutes=1)
+    st.session_state.last_day += (1 / 1440) # 1분 추가
+    
+    # 모델로 예측
+    new_res = model.predict([[curr_temp, curr_humi, st.session_state.last_day]])[0]
+    
+    # 새로운 데이터 행 생성
+    new_row = pd.DataFrame({
+        'Time': [new_time], 
+        'Resistance': [new_res],
+        'Temp': [curr_temp],
+        'Humi': [curr_humi]
+    })
+    
+    # 데이터셋에 추가 (최근 200개만 유지하여 속도 최적화)
+    st.session_state.sim_data = pd.concat([st.session_state.sim_data, new_row], ignore_index=True).tail(200)
+
+    # 4. 메인 화면 - 실시간 그래프
+    col_chart, col_stat = st.columns([3, 1])
+    
+    with col_chart:
+        # Plotly를 사용한 다이나믹 그래프
+        fig = go.Figure()
+        
+        # 저항 그래프
+        fig.add_trace(go.Scatter(
+            x=st.session_state.sim_data['Time'], 
+            y=st.session_state.sim_state['Resistance'],
+            mode='lines+markers',
+            name='Resistance (kΩ)',
+            line=dict(color='#00FF00', width=3),
+            marker=dict(size=4)
+        ))
+        
+        fig.update_layout(
+            title="Real-time Sensor Resistance Monitoring",
+            xaxis_title="Time",
+            yaxis_title="Resistance (kOhm)",
+            template="plotly_dark", # 다크모드로 전문가 포스 강조
+            height=500,
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_stat:
+        st.subheader("📊 실시간 상태")
+        st.metric("현재 온도", f"{curr_temp} °C")
+        st.metric("현재 습도", f"{curr_humi} %")
+        st.metric("예측 저항", f"{new_res:.4f} kΩ")
+        st.info("슬라이더를 움직이면 그래프 우측에 즉시 반영됩니다.")
+
+    # 5. 하단 보조 그래프 (온습도 변화 추이)
     st.divider()
-    col_rep1, col_rep2 = st.columns([1.5, 1])
-    
-    with col_rep1:
-        if hasattr(model, 'coef_'):
-            st.subheader("📝 Physical Regression Formula")
-            # 선형 모델 수식 출력 (K, ppm 기준)
-            st.info(f"**$R(k\Omega) = {model.intercept_:.2f} + ({model.coef_[0]:.4f} \\times T_K) + ({model.coef_[1]:.6f} \\times H_{{ppm}})$**")
-        elif hasattr(model, 'feature_importances_'):
-            st.subheader("💡 Feature Importance (Relative Impact)")
-            feat_imp = pd.Series(model.feature_importances_, index=['Temp(K)', 'Humidity(ppm)'])
-            plt.rcdefaults()
-            fig_imp, ax_imp = plt.subplots(figsize=(5, 2.2))
-            feat_imp.sort_values().plot(kind='barh', color=['#3498db', '#e74c3c'], ax=ax_imp)
-            ax_imp.set_title("Physical Feature Importance", fontsize=9)
-            st.pyplot(fig_imp)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Temperature Trend")
+        st.line_chart(st.session_state.sim_data.set_index('Time')['Temp'], height=150)
+    with c2:
+        st.caption("Humidity Trend")
+        st.line_chart(st.session_state.sim_data.set_index('Time')['Humi'], height=150)
 
-    with col_rep2:
-        st.subheader("🎯 Model Performance")
-        st.metric("결정계수 (R²)", f"{r2:.4f}")
-        st.metric("평균 오차 (RMSE)", f"{rmse:.4f} kΩ")
-
-    # 5. 실시간 저항 예측 시뮬레이터 (사용자 입력은 섭씨/습도 유지하되 내부 변환)
-    st.divider()
-    st.header("🔍 실시간 저항 예측 (Auto-Conversion)")
-    c_in1, c_in2, c_res = st.columns([1, 1, 2])
-    with c_in1:
-        input_temp_c = st.number_input("입력 온도 (°C)", value=float(df['온도'].mean()))
-    with c_in2:
-        input_humi_p = st.number_input("입력 습도 (%)", value=float(df['습도'].mean()))
-    
-    # 입력값 변환
-    input_k = input_temp_c + 273.15
-    input_p_sat = 6.112 * np.exp((17.62 * input_temp_c) / (243.12 + input_temp_c))
-    input_ppm = ((input_humi_p / 100) * input_p_sat / 1013.25) * 1_000_000
-    
-    pred_val = model.predict([[input_k, input_ppm]])[0]
-    
-    with c_res:
-        st.metric(f"예측 저항값", f"{pred_val:.4f} kΩ")
-        st.caption(f"변환된 값: {input_k:.2f} K / {input_ppm:.1f} ppm")
-
-    # 6. 영향도 분석 그래프 (K, ppm 축 사용)
-    st.divider()
-    st.header("📈 물리 변수 기반 시각화 (Physical Visual Analysis)")
-    
-    plt.rcdefaults()
-    sns.set_theme(style="whitegrid")
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-    # [1] Temp(K) vs Res
-    sns.regplot(ax=axes[0, 0], x='Temp_K', y='Resistance_kOhm', data=df, 
-                scatter_kws={'alpha': 0.02, 's': 1, 'color': 'gray'}, line_kws={'color': 'red'})
-    axes[0, 0].set_title("Absolute Temp (K) vs Resistance", fontsize=12)
-    axes[0, 0].set_xlabel("Temp (K)")
-    axes[0, 0].set_ylabel("Res (kOhm)")
-
-    # [2] Humidity(ppm) vs Res
-    sns.regplot(ax=axes[0, 1], x='Humidity_ppm', y='Resistance_kOhm', data=df, 
-                scatter_kws={'alpha': 0.02, 's': 1, 'color': 'gray'}, line_kws={'color': 'blue'})
-    axes[0, 1].set_title("Moisture Concentration (ppm) vs Resistance", fontsize=12)
-    axes[0, 1].set_xlabel("Humidity (ppm)")
-    axes[0, 1].set_ylabel("Res (kOhm)")
-
-    # [3] Accuracy Linearity
-    axes[1, 0].scatter(y, y_pred, alpha=0.1, s=1, color='purple')
-    axes[1, 0].plot([y.min(), y.max()], [y.min(), y.max()], 'r--', lw=1.5)
-    axes[1, 0].set_title(f"Model Linearity (R2={r2:.4f})", fontsize=12)
-    axes[1, 0].set_xlabel("Measured (kOhm)")
-    axes[1, 0].set_ylabel("Predicted (kOhm)")
-
-    # [4] Time-series Tracking
-    sample_df = df.iloc[::30]
-    axes[1, 1].plot(sample_df['측정 시간'], sample_df['Resistance_kOhm'], label='Measured', alpha=0.5, color='black', lw=1)
-    axes[1, 1].plot(sample_df['측정 시간'], y_pred[::30], label='Predicted', color='limegreen', linestyle='--', lw=1.5)
-    axes[1, 1].set_title("Time-series Tracking Performance", fontsize=12)
-    axes[1, 1].legend()
-
-    plt.tight_layout()
-    st.pyplot(fig)
-
-    # 7. 다운로드 (변환된 K, ppm 데이터 포함)
-    st.download_button("물리 변환 데이터 다운로드", df.to_csv(index=False).encode('utf-8'), "physical_sensor_analysis.csv")
+    # 실시간 느낌을 위한 자동 리프레시 버튼 (선택 사항)
+    if st.button("▶️ 데이터 계속 쌓기"):
+        st.rerun()
 
 else:
-    st.info("👋 센서 데이터 CSV 파일을 업로드해 주세요 (B열:온도, C열:습도, 저항 열 포함).")
+    st.info("👋 먼저 모델을 학습시키기 위해 CSV 데이터를 업로드해 주세요.")
