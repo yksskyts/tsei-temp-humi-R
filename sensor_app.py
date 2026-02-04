@@ -92,50 +92,71 @@ model_info = {
     }
 }
 
-# --- 사이드바 메뉴 구성 ---
-st.sidebar.title("🛠️ 분석 메뉴")
-app_mode = st.sidebar.radio("원하는 분석 기능을 선택하세요", 
-                           ["1. 전 모델 벤치마킹", "2. 노화 진단 및 미래 예측"])
+# --- 사이드바 구성 ---
+st.sidebar.title("🛠️ 분석 설정")
+app_mode = st.sidebar.radio("분석 기능 선택", ["1. 전 모델 벤치마킹", "2. 노화 진단 및 미래 예측"])
 
-# --- 1. 데이터 로드 (공통 섹션) ---
-st.title("🧪 센서 정밀 분석 시스템")
-uploaded_file = st.file_uploader("CSV 파일을 업로드하세요 (온도, 습도, 저항 필수)", type="csv")
+st.sidebar.divider()
+st.sidebar.header("📁 데이터 소스")
+data_source = st.sidebar.radio("데이터 소스 선택", ["GitHub 기본 데이터 (19.csv)", "사용자 파일 업로드"])
 
-if uploaded_file is not None:
-    # 데이터 읽기 및 컬럼 정리
-    df = pd.read_csv(uploaded_file)
+# --- GitHub 데이터 URL 설정 ---
+GITHUB_CSV_URL = "https://raw.githubusercontent.com/yksskyts/tsei-temp-humi-R/refs/heads/main/19.csv"
+
+# --- 1. 데이터 로딩 섹션 ---
+st.title("🧪 센서 정밀 분석 및 노화 진단 시스템")
+
+df = None
+
+if data_source == "GitHub 기본 데이터 (19.csv)":
+    try:
+        df = pd.read_csv(GITHUB_CSV_URL)
+        st.success(f"✅ GitHub에서 '19.csv' 데이터를 성공적으로 로드했습니다.")
+    except Exception as e:
+        st.error(f"❌ GitHub 데이터를 불러오지 못했습니다. (사유: {e})")
+else:
+    uploaded_file = st.file_uploader("분석할 CSV 파일을 업로드하세요", type="csv")
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+
+# 데이터가 존재할 경우에만 이하 로직 실행
+if df is not None:
+    # 컬럼 공백 제거 및 기본 전처리
     df.columns = [col.strip() for col in df.columns]
     
-    # 공통 물리 변환 및 시간 처리
+    # 공통 물리 변환
     df['Resistance_kOhm'] = df['저항'] / 1000.0
     
+    # 시간 기반 '경과 일수(Elapsed_Days)' 생성
     if '측정 시간' in df.columns:
         df['측정 시간'] = pd.to_datetime(df['측정 시간'])
         first_time = df['측정 시간'].min()
         df['Elapsed_Days'] = (df['측정 시간'] - first_time).dt.total_seconds() / (24 * 3600)
     else:
+        # 시간 컬럼 없을 시 행 인덱스 기반 생성
         df['Elapsed_Days'] = np.arange(len(df)) / (60 * 24)
 
-    # 습도 물리 변환 (Humidity_ppm 계산)
+    # 벤치마킹용 물리 변수 (PPM 변환)
     p_sat = 6.112 * np.exp((17.62 * df['온도']) / (243.12 + df['온도']))
     df['Humidity_ppm'] = ((df['습도'] / 100) * p_sat / 1013.25) * 1_000_000
     df['Temp_K'] = df['온도'] + 273.15
 
     # ---------------------------------------------------------
-    # MODE 1: 전 모델 벤치마킹 (첫 번째 코드 로직)
+    # MODE 1: 전 모델 벤치마킹
     # ---------------------------------------------------------
     if app_mode == "1. 전 모델 벤치마킹":
         st.sidebar.divider()
-        st.sidebar.header("🤖 모델 벤치마킹 설정")
-        selected_model_name = st.sidebar.selectbox("테스트할 모델을 선택하세요", list(model_info.keys()))
+        st.sidebar.header("🤖 모델 설정")
+        selected_model_name = st.sidebar.selectbox("테스트 모델 선택", list(model_info.keys()))
 
-        with st.sidebar.expander("💡 선택된 모델 특성 보기", expanded=True):
+        with st.sidebar.expander("💡 모델 특성", expanded=True):
             info = model_info[selected_model_name]
-            st.markdown(f"**한줄평:** {info['desc']}")
-            st.markdown(f"✅ **장점:** {info['pros']}")
-            st.markdown(f"❌ **단점:** {info['cons']}")
-            st.success(f"🎯 **추천:** {info['best_for']}")
+            st.write(f"**설명:** {info['desc']}")
+            st.write(f"✅ **장점:** {info['pros']}")
+            st.write(f"❌ **단점:** {info['cons']}")
+            st.info(f"🎯 **추천:** {info['best_for']}")
 
+        # 모델 객체 맵핑
         model_dict = {
             "Linear Regression": LinearRegression(),
             "Ridge Regression": Ridge(alpha=1.0),
@@ -155,187 +176,140 @@ if uploaded_file is not None:
         X = df[['Temp_K', 'Humidity_ppm']]
         y = df['Resistance_kOhm']
         
-        with st.spinner(f'{selected_model_name} 학습 중...'):
+        with st.spinner(f'{selected_model_name} 분석 중...'):
             model.fit(X, y)
             y_pred = model.predict(X)
             r2 = r2_score(y, y_pred)
             rmse = np.sqrt(mean_squared_error(y, y_pred))
 
-        # 리포트 섹션
         st.divider()
-        col_rep1, col_rep2 = st.columns([1.5, 1])
-        with col_rep1:
-            st.subheader(f"📝 {selected_model_name} 분석 결과")
+        col1, col2 = st.columns([1.5, 1])
+        with col1:
+            st.subheader(f"📝 {selected_model_name} 결과 보고서")
             if hasattr(model, 'coef_'):
                 coef = model.coef_.flatten()
-                intercept = model.intercept_
-                st.info(f"**공식:** $R(k\Omega) = {intercept:.2f} + ({coef[0]:.4f} \\times T_K) + ({coef[1]:.6f} \\times H_{{ppm}})$")
+                st.info(f"**보정 공식:** $R(k\Omega) = {model.intercept_:.2f} + ({coef[0]:.4f} \\times T_K) + ({coef[1]:.6f} \\times H_{{ppm}})$")
             elif hasattr(model, 'feature_importances_'):
-                feat_imp = pd.Series(model.feature_importances_, index=['Temp(K)', 'Humidity(ppm)'])
                 fig_imp, ax_imp = plt.subplots(figsize=(5, 2))
-                feat_imp.sort_values().plot(kind='barh', color=['#3498db', '#e74c3c'], ax=ax_imp)
-                ax_imp.set_title("Feature Importance", fontsize=10)
+                pd.Series(model.feature_importances_, index=['Temp(K)', 'Humidity(ppm)']).sort_values().plot(kind='barh', color='#3498db', ax=ax_imp)
+                ax_imp.set_title("Feature Importance")
                 st.pyplot(fig_imp)
             else:
-                st.warning("이 모델은 명시적인 수식이나 피처 중요도를 제공하지 않습니다.")
+                st.warning("이 모델은 해석용 수식을 제공하지 않습니다.")
 
-        with col_rep2:
-            st.subheader("🎯 모델 예측 성능")
-            st.metric("결정계수 ($R^2$)", f"{r2:.4f}")
-            st.metric("평균 오차 (RMSE)", f"{rmse:.4f} kΩ")
+        with col2:
+            st.subheader("🎯 성능 지표")
+            st.metric("R² Score (정확도)", f"{r2:.4f}")
+            st.metric("RMSE (평균 오차)", f"{rmse:.4f} kΩ")
 
-        # 시각화
         st.divider()
         st.header("📈 예측 성능 시각화")
-        plt.rcdefaults()
-        sns.set_theme(style="whitegrid")
         fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+        sns.set_theme(style="whitegrid")
         axes[0].scatter(y, y_pred, alpha=0.2, s=2, color='darkblue')
         axes[0].plot([y.min(), y.max()], [y.min(), y.max()], 'r--', lw=2)
-        axes[0].set_title(f"Measured vs Predicted ($R^2$={r2:.4f})")
-        axes[0].set_xlabel("Measured (kOhm)")
-        axes[0].set_ylabel("Predicted (kOhm)")
-        residuals = y - y_pred
-        sns.histplot(residuals, kde=True, ax=axes[1], color='purple')
-        axes[1].set_title("Residuals Distribution (Error)")
+        axes[0].set_title("Measured vs Predicted")
+        sns.histplot(y - y_pred, kde=True, ax=axes[1], color='purple')
+        axes[1].set_title("Error Distribution (Residuals)")
         st.pyplot(fig)
 
-        # 전 모델 성능 비교 순위
-        if st.sidebar.button("🏆 전 모델 성능 순위 보기"):
+        if st.sidebar.button("🏆 전체 모델 랭킹 확인"):
             st.divider()
             st.header("🏆 전 모델 성능 비교 순위")
             results = []
-            with st.spinner('전체 모델 벤치마킹 중...'):
-                for name, m in model_dict.items():
-                    m.fit(X, y)
-                    p = m.predict(X)
-                    results.append({
-                        "Model": name,
-                        "R² Score": r2_score(y, p),
-                        "RMSE (kΩ)": np.sqrt(mean_squared_error(y, p)),
-                        "Best For": model_info[name]['best_for']
-                    })
-            res_df = pd.DataFrame(results).sort_values(by="R² Score", ascending=False)
-            st.table(res_df)
+            for name, m in model_dict.items():
+                m.fit(X, y); p = m.predict(X)
+                results.append({"Model": name, "R²": r2_score(y, p), "RMSE": np.sqrt(mean_squared_error(y, p))})
+            st.table(pd.DataFrame(results).sort_values(by="R²", ascending=False))
 
     # ---------------------------------------------------------
-    # MODE 2: 노화 진단 및 미래 예측 (두 번째 코드 로직)
+    # MODE 2: 노화 진단 및 미래 예측
     # ---------------------------------------------------------
     elif app_mode == "2. 노화 진단 및 미래 예측":
         st.sidebar.divider()
-        st.sidebar.header("🤖 노화 예측 모델 설정")
-        model_choice = st.sidebar.selectbox(
-            "적용할 모델을 선택하세요",
-            [
-                "1. Linear Regression (선형)", 
-                "2. Ridge Regression (규제 선형)", 
-                "3. Decision Tree (의사결정 나무)", 
-                "4. Random Forest (랜덤 포레스트)", 
-                "5. Gradient Boosting (그래디언트 부스팅)"
-            ]
-        )
-        st.sidebar.warning("⚠️ 미래 예측(날짜 변경)은 1, 2번 선형 모델에서만 정상 작동합니다.")
+        st.sidebar.header("🤖 알고리즘 설정")
+        model_choice = st.sidebar.selectbox("예측 모델 선택", ["1. Linear Regression", "2. Ridge Regression", "3. Decision Tree", "4. Random Forest", "5. Gradient Boosting"])
+        st.sidebar.warning("⚠️ 미래 예측 시뮬레이션은 1, 2번 선형 모델을 권장합니다.")
 
-        # 학습 변수 정의 (노화 분석을 위해 Elapsed_Days 포함)
         X_cols = ['온도', '습도', 'Elapsed_Days']
         X = df[X_cols]
         y = df['Resistance_kOhm']
         
-        # 모델 객체 생성
         if "1." in model_choice: model = LinearRegression()
         elif "2." in model_choice: model = Ridge(alpha=1.0)
         elif "3." in model_choice: model = DecisionTreeRegressor(max_depth=10)
         elif "4." in model_choice: model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42)
         elif "5." in model_choice: model = GradientBoostingRegressor(n_estimators=50, random_state=42)
 
-        with st.spinner(f'{model_choice} 분석 중...'):
+        with st.spinner('노화 데이터 분석 중...'):
             model.fit(X, y)
             y_pred = model.predict(X)
             r2 = r2_score(y, y_pred)
             rmse = np.sqrt(mean_squared_error(y, y_pred))
 
-        # 분석 리포트
         st.divider()
-        col_rep1, col_rep2 = st.columns([1.5, 1])
-        
-        with col_rep1:
-            st.subheader("📊 센서 상태 및 열화 진단")
-            aging_analyzer = LinearRegression().fit(X, y)
-            degradation_rate = aging_analyzer.coef_[2] 
-            
-            if degradation_rate > 0:
-                st.warning(f"⚠️ **현재 상태: 열화 진행 중 (저항 증가)**")
-                st.write(f"온습도 고정 시, 하루 평균 **{degradation_rate:.4f} kΩ**씩 상승 중입니다.")
+        col_a, col_b = st.columns([1.5, 1])
+        with col_a:
+            st.subheader("📊 센서 노화(Aging) 진단")
+            # 노화율 계산을 위한 별도 선형 분석
+            aging_model = LinearRegression().fit(X, y)
+            drift = aging_model.coef_[2]
+            if drift > 0:
+                st.warning(f"⚠️ **상태: 저항 상승형 열화 발생**\n\n하루 평균 **{drift:.4f} kΩ**씩 저항값이 증가하고 있습니다.")
             else:
-                st.success(f"✅ **현재 상태: 안정화/활성화 중 (저항 감소)**")
-                st.write(f"온습도 고정 시, 하루 평균 **{abs(degradation_rate):.4f} kΩ**씩 하강 중입니다.")
-                
+                st.success(f"✅ **상태: 안정화 진행 중**\n\n하루 평균 **{abs(drift):.4f} kΩ**씩 저항이 하강하며 안정화되고 있습니다.")
+            
             if hasattr(model, 'coef_'):
-                st.info(f"**Regression Formula:** $R = {model.intercept_:.2f} + ({model.coef_[0]:.4f} \\cdot T) + ({model.coef_[1]:.4f} \\cdot H) + ({model.coef_[2]:.4f} \\cdot Day)$")
+                st.info(f"**물리 공식:** $R = {model.intercept_:.2f} + ({model.coef_[0]:.4f} \cdot T) + ({model.coef_[1]:.4f} \cdot H) + ({model.coef_[2]:.4f} \cdot Day)$")
             elif hasattr(model, 'feature_importances_'):
-                plt.rcdefaults()
-                fig_imp, ax_imp = plt.subplots(figsize=(5, 2.2))
-                feat_imp = pd.Series(model.feature_importances_, index=['Temp', 'Humi', 'Aging'])
-                feat_imp.sort_values().plot(kind='barh', color='#3498db', ax=ax_imp)
-                ax_imp.set_title("Feature Importance (Relative Impact)", fontsize=10)
-                st.pyplot(fig_imp)
+                fig_imp2, ax_imp2 = plt.subplots(figsize=(5, 2.2))
+                pd.Series(model.feature_importances_, index=['Temp', 'Humi', 'Aging']).sort_values().plot(kind='barh', color='#2ecc71', ax=ax_imp2)
+                ax_imp2.set_title("Variable Impact")
+                st.pyplot(fig_imp2)
 
-        with col_rep2:
-            st.subheader("🎯 모델 예측 성능")
-            st.metric("결정계수 (R²)", f"{r2:.4f}")
-            st.metric("평균 오차 (RMSE)", f"{rmse:.4f} kΩ")
+        with col_b:
+            st.subheader("🎯 예측 정확도")
+            st.metric("R² (결정계수)", f"{r2:.4f}")
+            st.metric("RMSE (오차 범위)", f"{rmse:.4f} kΩ")
 
-        # 미래 예측 시뮬레이터
         st.divider()
-        st.header("🔮 미래 저항 예측 시뮬레이터")
-        s_col1, s_col2, s_col3, s_res = st.columns([1, 1, 1, 2])
-        with s_col1:
-            s_temp = st.number_input("예상 온도 (°C)", value=float(df['온도'].mean()))
-        with s_col2:
-            s_humi = st.number_input("예상 습도 (%)", value=float(df['습도'].mean()))
-        with s_col3:
-            s_days = st.number_input("추가 사용일 (오늘+N일)", value=30, step=1)
+        st.header("🔮 미래 기저 저항 예측")
+        sc1, sc2, sc3, sr = st.columns([1, 1, 1, 2])
+        with sc1: st_temp = st.number_input("설정 온도 (°C)", value=float(df['온도'].mean()))
+        with sc2: st_humi = st.number_input("설정 습도 (%)", value=float(df['습도'].mean()))
+        with sc3: st_days = st.number_input("추가 사용일수", value=30)
         
-        target_day = df['Elapsed_Days'].max() + s_days
-        input_data = pd.DataFrame([[s_temp, s_humi, target_day]], columns=['온도', '습도', 'Elapsed_Days'])
-        future_val = model.predict(input_data)[0]
-        
-        with s_res:
-            st.metric(f"{s_days}일 후 예상 저항", f"{future_val:.4f} kΩ")
-            diff = future_val - df['Resistance_kOhm'].iloc[-1]
-            st.write(f"현재 마지막 측정값 대비 변화량: **{diff:+.4f} kΩ**")
+        future_day = df['Elapsed_Days'].max() + st_days
+        future_pred = model.predict(pd.DataFrame([[st_temp, st_humi, future_day]], columns=X_cols))[0]
+        with sr:
+            st.metric(f"{st_days}일 후 예상 저항", f"{future_pred:.4f} kΩ")
+            st.write(f"현재 마지막 측정값 대비 변화량: **{future_pred - df['Resistance_kOhm'].iloc[-1]:+.4f} kΩ**")
 
-        # 시각화 섹션 (4단)
         st.divider()
-        st.header("📈 영향도 및 성능 상세 분석")
-        plt.rcdefaults()
-        sns.set_theme(style="whitegrid")
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-        sns.regplot(ax=axes[0, 0], x='온도', y='Resistance_kOhm', data=df, 
-                    scatter_kws={'alpha': 0.02, 's': 1, 'color': 'gray'}, line_kws={'color': 'red'})
-        axes[0, 0].set_title("Temperature vs Resistance", fontsize=12)
-
-        temp_humi_effect = aging_analyzer.coef_[0] * df['온도'] + aging_analyzer.coef_[1] * df['습도'] + aging_analyzer.intercept_
-        drift_only = df['Resistance_kOhm'] - temp_humi_effect
-        axes[0, 1].scatter(df['Elapsed_Days'], drift_only, alpha=0.05, s=1, color='orange')
-        axes[0, 1].set_title("Pure Aging Drift (T/H Removed)", fontsize=12)
-
-        axes[1, 0].scatter(y, y_pred, alpha=0.1, s=1, color='purple')
-        axes[1, 0].plot([y.min(), y.max()], [y.min(), y.max()], 'r--', lw=1.5)
-        axes[1, 0].set_title(f"Model Linearity (R2={r2:.4f})", fontsize=12)
-
-        sample_df = df.iloc[::30]
-        axes[1, 1].plot(sample_df['측정 시간'], sample_df['Resistance_kOhm'], label='Measured', alpha=0.5, color='black', lw=1)
-        axes[1, 1].plot(sample_df['측정 시간'], y_pred[::30], label='ML Predicted', color='limegreen', linestyle='--', lw=1.5)
-        axes[1, 1].set_title("Real-time Tracking Performance", fontsize=12)
-        axes[1, 1].legend(prop={'size': 8})
+        st.header("📈 데이터 시각화 분석")
+        fig2, axes2 = plt.subplots(2, 2, figsize=(14, 10))
+        sns.regplot(ax=axes2[0, 0], x='온도', y='Resistance_kOhm', data=df, scatter_kws={'alpha': 0.05, 's': 1}, line_kws={'color': 'red'})
+        axes2[0, 0].set_title("Temperature Impact")
+        
+        # 순수 드리프트 시각화
+        pure_drift = df['Resistance_kOhm'] - (aging_model.coef_[0]*df['온도'] + aging_model.coef_[1]*df['습도'] + aging_model.intercept_)
+        axes2[0, 1].scatter(df['Elapsed_Days'], pure_drift, alpha=0.1, s=1, color='orange')
+        axes2[0, 1].set_title("Pure Aging Drift (T/H Removed)")
+        
+        axes2[1, 0].scatter(y, y_pred, alpha=0.1, s=1, color='green')
+        axes2[1, 0].plot([y.min(), y.max()], [y.min(), y.max()], 'r--')
+        axes2[1, 0].set_title("Model Linearity")
+        
+        sample = df.iloc[::20]
+        axes2[1, 1].plot(sample['측정 시간'], sample['Resistance_kOhm'], label='Actual', alpha=0.6)
+        axes2[1, 1].plot(sample['측정 시간'], y_pred[::20], label='ML', linestyle='--', color='lime')
+        axes2[1, 1].legend()
+        axes2[1, 1].set_title("Time-series Tracking")
         plt.tight_layout()
-        st.pyplot(fig)
+        st.pyplot(fig2)
 
-    # 8. 공통 데이터 다운로드
     st.divider()
-    st.download_button("최종 분석 데이터 받기", df.to_csv(index=False).encode('utf-8'), "sensor_analysis_result.csv")
+    st.download_button("📂 분석 데이터 다운로드", df.to_csv(index=False).encode('utf-8'), "sensor_analysis.csv")
 
 else:
-    st.info("👋 센서 데이터 CSV 파일을 업로드해 주세요 (온도, 습도, 저항 컬럼 포함).")
+    st.info("👋 데이터를 불러오는 중입니다. GitHub URL을 확인하거나 파일을 업로드해 주세요.")
