@@ -1,81 +1,51 @@
 import streamlit as st
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.signal import savgol_filter
 
-# 1. 페이지 설정
-st.set_page_config(page_title="Toluene K-Value Analyzer", layout="wide")
-st.title("🎯 톨루엔 센서 정밀 반응 분석 시스템")
-st.markdown("펌프 맥동(Fluctuation)을 제거하고 톨루엔 주입에 따른 순수 저항 변화율($k$)을 산출합니다.")
+# 1. 데이터 및 모델 정의
+a = 494.4331
+b = 0.5238
 
-# 2. 데이터 업로드
-st.sidebar.header("📁 데이터 업로드")
-uploaded_file = st.sidebar.file_uploader("분석할 센서 데이터(CSV) 업로드", type="csv")
+def predict_ppm(del_r):
+    """저항 변화값으로 농도(ppm)를 역산"""
+    if del_r <= 0: return 0
+    return (del_r / a) ** (1 / b)
 
-# 3. 분석 파라미터 설정
-st.sidebar.divider()
-st.sidebar.header("⚙️ 분석 설정")
-concentration = st.sidebar.number_input("톨루엔 농도 (ppm)", value=20.0, step=0.1)
-k_factor = st.sidebar.number_input("K-Value 정규화 계수", value=20000.0, step=100.0)
-window_size = st.sidebar.slider("필터 강도 (윈도우 크기)", 5, 51, 15, step=2)
+# 2. Streamlit UI 구성
+st.set_page_config(page_title="Toluene 농도 분석기", layout="wide")
+st.title("🧪 톨루엔 농도 예측 및 데이터 분석 도구")
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    df.columns = [c.strip() for c in df.columns]
-    
-    # [Step 1] 노이즈 및 맥동 제거
-    df['저항_Clean'] = savgol_filter(df['저항'], window_size, 2)
-    
-    # [Step 2] 구간 선택 (사용자가 슬라이더로 베이스라인과 피크 지점 선택)
-    st.subheader("📍 분석 구간 설정")
-    data_len = len(df)
-    base_range = st.slider("1. Baseline($R_0$) 측정 구간", 0, data_len, (0, int(data_len*0.2)))
-    gas_range = st.slider("2. Gas Response($R_{gas}$) 측정 구간", 0, data_len, (int(data_len*0.7), data_len))
-    
-    # [Step 3] K-Value 계산
-    r0 = df['저항_Clean'].iloc[base_range[0]:base_range[1]].mean()
-    r_gas = df['저항_Clean'].iloc[gas_range[0]:gas_range[1]].max()
-    
-    delta_r_r0 = (r_gas - r0) / r0
-    k_value = delta_r_r0 / k_factor
-    
-    # 4. 결과 출력 (Metrics)
-    st.divider()
-    st.header("📊 분석 결과 (K-Value)")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Baseline ($R_0$)", f"{r0/1000:.2f} kΩ")
-    c2.metric("Gas Peak ($R_{gas}$)", f"{r_gas/1000:.2f} kΩ")
-    c3.metric("반응도 ($\Delta R/R_0$)", f"{delta_r_r0:.4f}")
-    c4.metric("최종 K-Value", f"{k_value:.6e}")
+col1, col2 = st.columns([1, 1])
 
-    # 5. 시각화 (정제된 신호 및 분석 구간 표시)
-    st.divider()
-    st.header("📈 신호 트래킹 및 보정 결과")
+with col1:
+    st.header("🔍 농도 예측 (Inference)")
+    input_dr = st.number_input("저항 변화량(delR, Ohm)을 입력하세요:", min_value=0.0, value=10000.0)
     
-    fig, ax = plt.subplots(figsize=(14, 6))
+    predicted_ppm = predict_ppm(input_dr)
     
-    # 원본 데이터와 정제된 데이터
-    ax.plot(df.index, df['저항'], color='lightgray', alpha=0.4, label='Raw Signal (with Fluctuation)')
-    ax.plot(df.index, df['저항_Clean'], color='blue', lw=2, label='Cleaned Signal (Pulsation Removed)')
+    st.metric(label="예측된 톨루엔 농도", value=f"{predicted_ppm:.2f} ppm")
+    st.info(f"적용 수식: ppm = (ΔR / {a:.2f})^(1 / {b:.4f})")
+
+with col2:
+    st.header("📈 센서 응답 곡선")
+    ppm_range = np.linspace(10, 5000, 500)
+    dr_range = a * (ppm_range ** b)
     
-    # 분석 구간 강조
-    ax.axvspan(base_range[0], base_range[1], color='gray', alpha=0.2, label='Baseline Period')
-    ax.axvspan(gas_range[0], gas_range[1], color='red', alpha=0.1, label='Gas Response Period')
-    
-    # R0, R_gas 선 표시
-    ax.axhline(r0, color='black', linestyle='--', alpha=0.7)
-    ax.axhline(r_gas, color='red', linestyle='--', alpha=0.7)
-    
-    ax.set_ylabel("Resistance (Ohm)")
-    ax.set_xlabel("Time Step (Index)")
-    ax.legend(loc='upper left')
-    ax.set_title(f"Toluene Response Analysis (Conc: {concentration}ppm)")
-    
+    fig, ax = plt.subplots()
+    ax.plot(ppm_range, dr_range, label="Power Model Fit", color='blue')
+    ax.scatter([10, 30, 50, 70, 100, 300, 500, 700, 1000, 3000, 5000], 
+               [3097, 3234, 3334, 3235, 6721, 7686, 8780, 10027, 11716, 37428, 108259], 
+               color='red', label='Actual Data')
+    ax.set_xlabel("Concentration (ppm)")
+    ax.set_ylabel("Resistance Change (Ohm)")
+    ax.legend()
     st.pyplot(fig)
 
-    # 6. 리포트 저장용 텍스트
-    st.info(f"💡 **전문가 메모:** 현재 노이즈 필터링을 통해 펌프 맥동을 제거한 상태에서 $R_0$ 대비 약 {delta_r_r0*100:.2f}%의 저항 변화가 감지되었습니다.")
-
-else:
-    st.info("👋 분석할 톨루엔 반응 CSV 데이터를 업로드해 주세요.")
+st.divider()
+st.subheader("📋 입력 데이터 참조")
+data = {
+    "ppm": [10, 30, 50, 70, 100, 300, 500, 700, 1000, 3000, 5000],
+    "delR": [3097, 3234, 3334, 3235, 6721, 7686, 8780, 10027, 11716, 37428, 108259]
+}
+st.dataframe(pd.DataFrame(data).T)
