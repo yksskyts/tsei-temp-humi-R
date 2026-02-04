@@ -312,4 +312,4 @@ if df is not None:
     st.download_button("📂 분석 데이터 다운로드", df.to_csv(index=False).encode('utf-8'), "sensor_analysis.csv")
 
 else:
-    st.info("👋 데이터를 불러오는 중입니다. GitHub URL을 확인하거나 파일을 업로드해 주세요.")
+    st.info("👋 데이터를 불러오는 중입니다. GitHub URL을 확인하거나 파일을 업로드해 주세요.")git push origin main
