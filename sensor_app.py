@@ -3,67 +3,75 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve
+from sklearn.metrics import r2_score
 
-# 1. 모델 계수 정의 (R^2 = 0.9991)
-# y = c3*x^3 + c2*x^2 + c1*x + intercept
-c3 = 9.43816e-07
-c2 = -0.00270067
-c1 = 10.86389
-intercept = 3505.8114
+# 1. 원본 데이터 정의
+ppm_data = np.array([10, 30, 50, 70, 100, 300, 500, 700, 1000, 3000, 5000])
+dr_data = np.array([3097, 3234, 3334, 3235, 6721, 7686, 8780, 10027, 11716, 37428, 108259])
 
-# 지수 모델 (초기값 추정용, R^2 = 0.9366)
-a_exp = 4527.0943
-b_exp = 0.000675
+# 2. 모델 계수 (기 도출된 값 적용)
+# [1차] y = p1*x + p0
+p1_1, p0_1 = 19.003, -83.379
+# [2차] y = p2*x^2 + p1*x + p0
+p2_2, p1_2, p0_2 = 0.004106, -0.1064, 5291.92
+# [3차] y = p3*x^3 + p2*x^2 + p1*x + p0
+p3_3, p2_3, p1_3, p0_3 = 9.438e-07, -0.0027, 10.86, 3505.81
 
-def poly3_func(x, target_y):
-    """3차 다항식에서 ppm(x)을 찾기 위한 방정식"""
-    return c3*x**3 + c2*x**2 + c1*x + intercept - target_y
+# 3. 예측 함수 정의
+def predict_ppm(target_dr, degree):
+    if target_dr <= 0: return 0.0
+    if degree == 1:
+        # 1차 역산: x = (y - p0) / p1
+        return (target_dr - p0_1) / p1_1
+    elif degree == 2:
+        # 2차 역산 (근의 공식): ax^2 + bx + (c-y) = 0
+        a, b, c = p2_2, p1_2, p0_2 - target_dr
+        return (-b + np.sqrt(max(0, b**2 - 4*a*c))) / (2*a)
+    elif degree == 3:
+        # 3차 역산 (수치 해석)
+        func = lambda x: p3_3*x**3 + p2_3*x**2 + p1_3*x + p0_3 - target_dr
+        return float(fsolve(func, x0=1000)[0])
 
-def predict_ppm_precise(target_dr):
-    """수치 해석을 통한 정밀 ppm 역산"""
-    if target_dr <= intercept: return 0.0
-    
-    # 지수 모델로 대략적인 초기값(Guess) 계산
-    initial_guess = np.log(target_dr / a_exp) / b_exp if target_dr > 0 else 0
-    if initial_guess < 0: initial_guess = 10.0
-    
-    # fsolve를 이용해 정밀한 해(ppm) 도출
-    solution = fsolve(poly3_func, x0=initial_guess, args=(target_dr))
-    return max(0.0, float(solution[0]))
+# 4. Streamlit UI
+st.set_page_config(page_title="다항식 모델 비교 분석기", layout="wide")
+st.title("📊 다항식 차수별 모델 비교 및 ppm 추측 도구")
 
-# 2. Streamlit UI 구성
-st.set_page_config(page_title="Toluene 정밀 분석기", layout="wide")
-st.title("🚀 톨루엔 농도 정밀 분석 도구 (3차 다항식 모델)")
-
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.header("🎯 정밀 농도 예측")
-    st.write("3차 다항식 모델 ($R^2=0.9991$)을 사용하여 ppm을 추측합니다.")
-    
-    input_dr = st.number_input("저항 변화량(ΔR, Ohm)을 입력하세요:", min_value=0.0, value=15000.0, step=100.0)
-    
-    precise_ppm = predict_ppm_precise(input_dr)
-    
-    st.metric(label="예측된 정밀 톨루엔 농도", value=f"{precise_ppm:.2f} ppm")
-    st.success(f"모델 신뢰도: R² = 0.9991")
-
-with col2:
-    st.header("📉 최적 모델 피팅 곡선")
-    ppm_range = np.linspace(10, 5000, 1000)
-    dr_poly3 = c3*ppm_range**3 + c2*ppm_range**2 + c1*ppm_range + intercept
-    
-    fig, ax = plt.subplots()
-    ax.plot(ppm_range, dr_poly3, label="3rd Poly Fit (Best R2)", color='green', linewidth=2)
-    ax.scatter([10, 30, 50, 70, 100, 300, 500, 700, 1000, 3000, 5000], 
-               [3097, 3234, 3334, 3235, 6721, 7686, 8780, 10027, 11716, 37428, 108259], 
-               color='red', label='Measured Data', zorder=5)
-    ax.set_xlabel("Concentration (ppm)")
-    ax.set_ylabel("Resistance Change (ΔR, Ohm)")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    st.pyplot(fig)
+# 상단: 모델 비교 지표
+st.subheader("📌 모델 성능 비교 ($R^2$)")
+cols = st.columns(3)
+metrics = [("1차 (Linear)", 0.9312), ("2차 (Quadratic)", 0.9935), ("3차 (Cubic)", 0.9991)]
+for i, (name, r2) in enumerate(metrics):
+    cols[i].metric(name, f"R² = {r2:.4f}")
 
 st.divider()
-st.subheader("📋 분석 모델 수식 정보")
-st.latex(rf"y = {c3:.4e}x^3 + ({c2:.4f})x^2 + {c1:.2f}x + {intercept:.2f}")
+
+# 메인 분석 영역
+col_left, col_right = st.columns([1, 1.2])
+
+with col_left:
+    st.header("🔍 농도 추측 실행")
+    selected_degree = st.radio("사용할 모델 차수를 선택하세요:", [1, 2, 3], index=2, horizontal=True)
+    input_dr = st.number_input("저항 변화량(ΔR, Ohm) 입력:", min_value=0.0, value=15000.0)
+    
+    res_ppm = predict_ppm(input_dr, selected_degree)
+    
+    st.success(f"### 예측 농도: {res_ppm:.2f} ppm")
+    st.info(f"선택 모델: {selected_degree}차 다항식")
+
+with col_right:
+    st.header("📈 전구간 피팅 시각화")
+    x_range = np.linspace(0, 5500, 1000)
+    y1 = p1_1*x_range + p0_1
+    y2 = p2_2*x_range**2 + p1_2*x_range + p0_2
+    y3 = p3_3*x_range**3 + p2_3*x_range**2 + p1_3*x_range + p0_3
+    
+    fig, ax = plt.subplots()
+    ax.scatter(ppm_data, dr_data, color='black', label='Actual Data', zorder=5)
+    ax.plot(x_range, y1, '--', label='1st Degree', alpha=0.7)
+    ax.plot(x_range, y2, '--', label='2nd Degree', alpha=0.7)
+    ax.plot(x_range, y3, '-', label='3rd Degree', linewidth=2, color='red')
+    ax.set_xlabel("Concentration (ppm)")
+    ax.set_ylabel("Resistance Change (Ohm)")
+    ax.legend()
+    ax.grid(True, alpha=0.2)
+    st.pyplot(fig)
